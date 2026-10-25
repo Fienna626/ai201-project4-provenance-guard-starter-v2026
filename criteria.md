@@ -44,61 +44,71 @@ Two things worth knowing before you pick numbers:
 ---
 ## 1.
 
-<!-- Your criterion. It must name a number. -->
-
-
+Of 10 pieces of writing I authored myself, no more than 1 may receive the
+high-confidence AI label in **each of the three evaluation trials**.
 
 **Why this target:**
 
-
+False accusations can harm a real writer more than a missed AI submission
+harms the site. Requiring the limit in every trial keeps a lucky run from
+hiding an inconsistent detector.
 
 ---
 
 ## 2.
 
-<!-- Your criterion. -->
-
-
+For a fixed set of 5 clearly human-written and 5 clearly AI-written samples,
+the mean combined score for the AI-written set must exceed the human-written
+set by at least **0.20 in each of the three evaluation trials**.
 
 **Why this target:**
 
-
+The score should provide a useful distinction across known examples, not just
+produce different labels by chance. A 0.20 gap is a meaningful, checkable
+separation while recognizing that these scores are estimates, not proof.
 
 ---
 
 ## 3.
 
-<!-- Your criterion. -->
-
-
+Each of the three labels—`human`, `unsure`, and `ai`—must be returned by at
+least **one sample in the fixed 10-sample evaluation set in each trial**.
 
 **Why this target:**
 
-
+All three outcomes need to be reachable for the service to express uncertainty
+as well as strong judgments. Checking each trial catches label coverage that
+depends on a one-off score fluctuation.
 
 ---
 
 ## 4.
 
-<!-- Your criterion. -->
-
-
+For an existing `content_id`, a valid appeal must return a successful response
+and append **exactly one** appeal event with that ID and status `under_review`.
+An appeal for an unknown ID must return a 4xx response and append **no** appeal
+event.
 
 **Why this target:**
 
-
+The writer needs a verifiable path to challenge a decision, and a typo or
+unknown ID should not look like a successful appeal. Checking the response and
+append-only log makes both outcomes observable.
 
 ---
 
 ## 5.
 
-<!-- Your criterion. -->
-
-
+Requests with missing `text`, non-string `text`, whitespace-only `text`, or
+more than **10,000 characters** must each return a JSON 4xx error, create no
+decision entry, and never produce a server error. Each rejected request must
+also create one rejection entry in the audit log.
 
 **Why this target:**
 
-
+These inputs are malformed or unnecessarily large and should not reach the
+signals or crash the route. A defined size bound and visible rejection make
+the behavior testable and help diagnose rejected submissions.
 
 ---
 

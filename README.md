@@ -39,7 +39,21 @@
 <!-- The path a submission takes, from arriving to the label a reader sees.
      Six or seven steps — this is the trace you wrote in Milestone 1. -->
 
-
+1. A client sends `text` and `creator_id` as JSON to `POST /submit`.
+2. The route validates that both are non-empty strings, rejects text over
+   10,000 characters, and reports text that is too short for the detector.
+3. `detector.model_signal` scores how predictable the text is to the local
+   language model.
+4. `stylometry.style_signal` scores sentence-length variation, vocabulary
+   repetition, and selected punctuation patterns.
+5. `scoring.combine_signals` averages the two scores using the configured
+   weights: 0.50 model and 0.50 style. The combined score is returned as both
+   `combined_score` and `confidence`; it is not a calibrated probability.
+6. The route creates a `content_id`, writes the decision and both component
+   scores plus the combined score to `logs/audit.jsonl`, and returns the scores.
+7. **Current milestone status:** the response's `guess` and `label` are still
+   pending. Milestone 5's score-to-label mapping and the appeal handler have
+   not yet been implemented.
 
 ---
 
@@ -53,35 +67,76 @@
 
 ### Signal one — the model signal
 
-**What it measures:**
+**What it measures:** `detector.model_signal` scores how predictable the text is
+to the local GPT-2 model; lower perplexity becomes a higher 0–1 score.
 
-**Why that might differ between human and AI writing:**
+**Why that might differ between human and AI writing:** Generated text often
+uses likely next words, while human writing can be more surprising.
 
-**What it can't see:**
+**What it can't see:** Predictability is not authorship. Plain, conventional
+human writing may also be predictable, and unusual human writing can look
+surprising to the model.
 
 ### Signal two — the style signal
 
-**What it measures:**
+**What it measures:** `stylometry.style_signal` averages three normalized
+heuristics: inverse sentence-length variation, inverse type-token ratio, and
+inverse density of commas, semicolons, colons, dashes, and brackets. Each
+component and the final score are on a 0–1 scale; higher means more AI-like.
+Specifically, sentence variation is capped at a coefficient of variation of
+`1.0`, and punctuation density is scaled to `0–1` over `0.12` marks per word;
+the type-token ratio is already between `0` and `1`.
 
-**Why that might differ between human and AI writing:**
+**Why that might differ between human and AI writing:** Generated prose may
+have more even sentence lengths, repeated vocabulary, and fewer unusual
+non-terminal punctuation marks than an individual writer's text.
 
-**What it can't see:**
+**What it can't see:** It cannot understand meaning or verify authorship.
+Sentence splitting, quotations, and punctuation edits can change the features
+without changing who wrote the underlying ideas. Type-token ratio also varies
+with text length.
 
 ### The combining rule
 
 <!-- Write the rule in words, then give the numbers. What happens when the two
      signals disagree? -->
 
-**The rule:**
+**The rule:** Take the weighted arithmetic mean of the two 0–1 scores, rounded
+to four decimal places. A disagreement pulls the result between the signals,
+toward uncertainty, rather than allowing one score to override the other.
 
-**The numbers:**
+**The numbers:** `0.50 × model_score + 0.50 × style_score`. The current
+thresholds are `0.35` and `0.65`; scores between them will be the unsure band
+when label mapping is implemented in Milestone 5. The API's `confidence` field
+currently carries this combined AI-likelihood score; it is not a probability
+that the authorship decision is correct.
 
 **Where it lives:** `scoring.py::combine_signals`
 
 <!-- ⚠️ The grader checks your code against that line. If your rule lives
      somewhere else, say where. -->
 
-**A case where my two signals split, and what my rule does with it:**
+**A case where my two signals split, and what my rule does with it:** On the
+AI-written polished sample, the model signal was `0.0802` while the style
+signal was `0.4873`. Their equal-weight average is `0.2838`, so one near-neutral
+style signal does not override the model's low score. This is a miss for that
+AI-written sample, not evidence that the score proves authorship. On the
+conventional borderline sample, the signals were `0.6145` and `0.4372`; the
+combined `0.5259` lands between them instead of treating the model signal
+alone as decisive.
+
+Calibration runs used the same signal implementations on these five
+deliberately composed samples. The AI-written examples were generated for this
+check; the personal and formal examples are style stand-ins, not independently
+verified human-authored data.
+
+| Sample | Model signal | Style signal | Combined score |
+|---|---:|---:|---:|
+| AI-written polished prose | 0.0802 | 0.4873 | 0.2838 |
+| Personal narrative style | 0.2971 | 0.4745 | 0.3858 |
+| Conventional borderline prose | 0.6145 | 0.4372 | 0.5259 |
+| Formal prose style | 0.1776 | 0.3389 | 0.2583 |
+| Lightly edited AI-written prose | 0.3721 | 0.2603 | 0.3162 |
 
 
 
@@ -111,24 +166,31 @@
 
 ## Sample Run
 
-<!-- One submission and one appeal, pasted as text: the request, the response,
-     and the log entries. -->
+<!-- One submission and its audit log entry, pasted as text: the request,
+     response, and log entry. -->
 
 **A submission**
 
-<!-- The response needs content_id, guess, confidence, label, AND both
-     signal scores - model_score and style_score. Unit 8's tools read those
-     two off the response, so leaving them out costs you next unit's
-     diagnostics. -->
+<!-- confidence is the combined AI-likelihood score, not calibrated certainty.
+     The guess and reader-facing label remain pending until Milestone 5. -->
 
 ```bash
 $ curl -X POST http://127.0.0.1:5000/submit \
   -H "Content-Type: application/json" \
-  -d '{"text": "...", "creator_id": "..."}'
+  -d '{"text": "The narrow street was wet from the storm. I stopped to tie my shoe, then noticed a small blue button in the gutter.", "creator_id": "milestone4-demo"}'
 ```
 
 ```json
-
+{
+  "combined_score": 0.4545,
+  "confidence": 0.4545,
+  "content_id": "3c54b1bb-2d23-49bf-928e-b1fc647d0c46",
+  "creator_id": "milestone4-demo",
+  "guess": "pending",
+  "label": "Pending label mapping.",
+  "model_score": 0.4775,
+  "style_score": 0.4314
+}
 ```
 
 **An appeal**
@@ -146,11 +208,26 @@ $ curl -X POST http://127.0.0.1:5000/appeal \
 **What the log shows afterwards**
 
 ```bash
-$ curl "http://127.0.0.1:5000/log?limit=3"
+$ curl "http://127.0.0.1:5000/log?limit=1"
 ```
 
 ```json
-
+{
+  "count": 1,
+  "entries": [
+    {
+      "combined_score": 0.4545,
+      "content_id": "3c54b1bb-2d23-49bf-928e-b1fc647d0c46",
+      "creator_id": "milestone4-demo",
+      "guess": "pending",
+      "label": "Pending label mapping.",
+      "model_score": 0.4775,
+      "status": "decided",
+      "style_score": 0.4314,
+      "timestamp": "2026-10-25T07:57:36+00:00"
+    }
+  ]
+}
 ```
 
 ---
@@ -159,15 +236,29 @@ $ curl "http://127.0.0.1:5000/log?limit=3"
 
 **Moment 1**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I asked the AI to trace a submission through the starter
+  service, explain what each signal measures and cannot see, and describe the
+  false-positive and endpoint-contract paths.
+- *What came back:* It inspected `app.py`, `detector.py`, `stylometry.py`,
+  `scoring.py`, and `audit.py`, then returned a seven-step flow and identified
+  that `/submit` and `/appeal` were still starter stubs.
+- *What I changed:* I used that trace to write five measurable acceptance
+  criteria in `criteria.md`, including a false-positive limit, appeal behavior,
+  and malformed-input behavior.
 
 **Moment 2**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I asked the AI to implement Milestones 3 and 4: first
+  verify a hardcoded route, then add the local-model signal, implement the
+  style features and combining rule, and check the response and audit log.
+- *What came back:* It implemented the staged endpoint and three stylometry
+  measures, used an equal-weight average, and ran sample inputs through both
+  signals. The polished AI-style sample notably scored 0.0802 on the model
+  signal and 0.4873 on the style signal.
+- *What I changed:* I kept equal weights so neither imperfect heuristic
+  dominates, checked the values against the endpoint and audit output, and
+  documented the AI-style sample as a miss rather than presenting the detector
+  as reliable authorship proof.
 
 <!-- ═══════════════════════ UNIT 8 — THE TEST ═══════════════════════ -->
 
